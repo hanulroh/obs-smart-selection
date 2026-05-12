@@ -313,6 +313,21 @@ bool on_select_region_clicked(obs_properties_t *props, obs_property_t *prop,
 	local_cx = std::max(1, local_cx);
 	local_cy = std::max(1, local_cy);
 
+	// HighDPI: Qt geometry/local coords are logical pixels; monitor_capture
+	// works in physical pixels. Scale by the target monitor's DPR so the
+	// crop region maps to the actual captured frame.
+	if (found_idx >= 0 && found_idx < screens.size()) {
+		const qreal dpr = screens[found_idx]->devicePixelRatio();
+		if (dpr > 0.0) {
+			local_x  = (int)(local_x  * dpr);
+			local_y  = (int)(local_y  * dpr);
+			local_cx = (int)(local_cx * dpr);
+			local_cy = (int)(local_cy * dpr);
+			obs_log(LOG_INFO, "DPR scaling: ratio=%.2f -> x=%d y=%d cx=%d cy=%d",
+				(double)dpr, local_x, local_y, local_cx, local_cy);
+		}
+	}
+
 	obs_data_t *s = obs_source_get_settings(ctx->self);
 	obs_data_set_int(s, SETTING_MONITOR_IDX, found_idx);
 	obs_data_set_int(s, SETTING_X,  local_x);
