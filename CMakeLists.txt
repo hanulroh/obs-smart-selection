@@ -4,8 +4,10 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCO
 
 project(${_name} VERSION ${_version})
 
-option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" ON)
-option(ENABLE_QT "Use Qt functionality" ON)
+# Override the CMakePresets.json defaults which leave these OFF.
+# Smart Selection requires both the frontend API and Qt6 Widgets.
+set(ENABLE_FRONTEND_API ON CACHE BOOL "Use obs-frontend-api for UI functionality" FORCE)
+set(ENABLE_QT           ON CACHE BOOL "Use Qt functionality"                      FORCE)
 
 include(compilerconfig)
 include(defaults)
@@ -55,8 +57,4 @@ if(ENABLE_QT)
   )
 endif()
 
-# --- C++17 (designated init not required; use ordered/named field assignment) ---
-target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_17 c_std_17)
-
-set_target_properties_plugin(${CMAKE_PROJECT_NAME}
-  PROPERTIES OUTPUT_NAME ${_name})
+# --- C++17 (designated init not required; use ordered/
