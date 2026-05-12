@@ -171,6 +171,37 @@ void ss_video_render(void *data, gs_effect_t *)
 // an internal libobs API not exported to plugins. libobs walks active children
 // (via ss_enum_active_sources below) and ticks them automatically.
 
+// CRITICAL: For wrapped/private sources to actually capture, libobs needs us
+// to forward the show/active state changes. Without these the child's show
+// count stays at 0 and monitor_capture never starts capturing → black canvas.
+void ss_show(void *data)
+{
+	auto *ctx = static_cast<SmartSelectionSource *>(data);
+	if (ctx && ctx->internal_mc)
+		obs_source_inc_showing(ctx->internal_mc);
+}
+
+void ss_hide(void *data)
+{
+	auto *ctx = static_cast<SmartSelectionSource *>(data);
+	if (ctx && ctx->internal_mc)
+		obs_source_dec_showing(ctx->internal_mc);
+}
+
+void ss_activate(void *data)
+{
+	auto *ctx = static_cast<SmartSelectionSource *>(data);
+	if (ctx && ctx->internal_mc)
+		obs_source_inc_active(ctx->internal_mc);
+}
+
+void ss_deactivate(void *data)
+{
+	auto *ctx = static_cast<SmartSelectionSource *>(data);
+	if (ctx && ctx->internal_mc)
+		obs_source_dec_active(ctx->internal_mc);
+}
+
 void ss_enum_active_sources(void *data, obs_source_enum_proc_t enum_callback,
 			    void *param)
 {
@@ -309,34 +340,4 @@ obs_properties_t *ss_properties(void *data)
 			       1, 16384, 1);
 	obs_properties_add_int(p, SETTING_CY,
 			       obs_module_text("SmartSelection.Height"),
-			       1, 16384, 1);
-	return p;
-}
-
-// ----- Build the obs_source_info struct -----
-
-obs_source_info make_source_info()
-{
-	obs_source_info info = {};
-	info.id           = kSourceId;
-	info.type         = OBS_SOURCE_TYPE_INPUT;
-	info.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW;
-	info.icon_type    = OBS_ICON_TYPE_DESKTOP_CAPTURE;
-
-	info.get_name           = ss_get_name;
-	info.create             = ss_create;
-	info.destroy            = ss_destroy;
-	info.get_width          = ss_get_width;
-	info.get_height         = ss_get_height;
-	info.get_defaults       = ss_get_defaults;
-	info.get_properties     = ss_properties;
-	info.update             = ss_update;
-	info.video_render       = ss_video_render;
-	info.enum_active_sources = ss_enum_active_sources;
-	return info;
-}
-
-} // namespace
-
-extern "C" struct obs_source_info smart_selection_source_info = make_source_info();
-                 
+			       1, 163
