@@ -4,9 +4,9 @@ Smart Selection — source implementation.
 This source is a "wrapper": it owns a private monitor_capture child source and
 a crop_filter attached to that child. The user-facing properties are:
 
-  • Monitor index (which monitor to capture from)
-  • Region X, Y, Width, Height (crop applied to that monitor's frame)
-  • "🎯 Drag to select region" button (opens fullscreen Qt overlay)
+  * Monitor index (which monitor to capture from)
+  * Region X, Y, Width, Height (crop applied to that monitor's frame)
+  * "🎯 Drag to select region" button (opens fullscreen Qt overlay)
 
 The Qt overlay must be invoked on OBS's UI (main) thread because it touches
 Qt widgets. OBS calls obs_properties_t button callbacks on the UI thread
@@ -30,11 +30,11 @@ extern "C" {
 #include <algorithm>
 #include <cstring>
 
-#define SETTING_MONITOR_IDX  "monitor"
-#define SETTING_X            "x"
-#define SETTING_Y            "y"
-#define SETTING_CX           "cx"
-#define SETTING_CY           "cy"
+#define SETTING_MONITOR_IDX "monitor"
+#define SETTING_X           "x"
+#define SETTING_Y           "y"
+#define SETTING_CX          "cx"
+#define SETTING_CY          "cy"
 
 #define DEFAULT_CX 800
 #define DEFAULT_CY 600
@@ -42,9 +42,9 @@ extern "C" {
 namespace {
 
 struct SmartSelectionSource {
-	obs_source_t *self            = nullptr;
-	obs_source_t *internal_mc     = nullptr; // monitor_capture child
-	obs_source_t *internal_crop   = nullptr; // crop_filter on the child
+	obs_source_t *self          = nullptr;
+	obs_source_t *internal_mc   = nullptr;
+	obs_source_t *internal_crop = nullptr;
 
 	int monitor_idx = 0;
 	int x  = 0;
@@ -55,17 +55,13 @@ struct SmartSelectionSource {
 
 const char *kSourceId = "smart_selection_source";
 
-// ----- Helpers -----
-
 void apply_monitor_to_child(SmartSelectionSource *ctx)
 {
 	if (!ctx->internal_mc)
 		return;
 	obs_data_t *s = obs_data_create();
-	// Set both deprecated int and modern string in case downstream picks
-	// one or the other; harmless if a key is ignored.
 	obs_data_set_int(s, "monitor", ctx->monitor_idx);
-	obs_data_set_int(s, "method", 2); // DXGI desktop duplication where supported
+	obs_data_set_int(s, "method", 2);
 	obs_source_update(ctx->internal_mc, s);
 	obs_data_release(s);
 }
@@ -84,8 +80,6 @@ void apply_crop_to_child(SmartSelectionSource *ctx)
 	obs_data_release(s);
 }
 
-// ----- OBS source vtable -----
-
 const char *ss_get_name(void *)
 {
 	return obs_module_text("SmartSelection.Name");
@@ -101,7 +95,6 @@ void *ss_create(obs_data_t *settings, obs_source_t *source)
 	ctx->cx          = (int)obs_data_get_int(settings, SETTING_CX);
 	ctx->cy          = (int)obs_data_get_int(settings, SETTING_CY);
 
-	// Build child monitor_capture.
 	{
 		obs_data_t *s = obs_data_create();
 		obs_data_set_int(s, "monitor", ctx->monitor_idx);
@@ -111,7 +104,6 @@ void *ss_create(obs_data_t *settings, obs_source_t *source)
 		obs_data_release(s);
 	}
 
-	// Build crop_filter and attach it.
 	{
 		obs_data_t *s = obs_data_create();
 		obs_data_set_bool(s, "relative", false);
@@ -130,19 +122,15 @@ void *ss_create(obs_data_t *settings, obs_source_t *source)
 	obs_log(LOG_INFO,
 		"created (monitor=%d x=%d y=%d cx=%d cy=%d)",
 		ctx->monitor_idx, ctx->x, ctx->y, ctx->cx, ctx->cy);
-
 	return ctx;
 }
 
 void ss_destroy(void *data)
 {
 	auto *ctx = static_cast<SmartSelectionSource *>(data);
-	if (!ctx)
-		return;
-	if (ctx->internal_crop)
-		obs_source_release(ctx->internal_crop);
-	if (ctx->internal_mc)
-		obs_source_release(ctx->internal_mc);
+	if (!ctx) return;
+	if (ctx->internal_crop) obs_source_release(ctx->internal_crop);
+	if (ctx->internal_mc)   obs_source_release(ctx->internal_mc);
 	delete ctx;
 }
 
@@ -161,45 +149,30 @@ uint32_t ss_get_height(void *data)
 void ss_video_render(void *data, gs_effect_t *)
 {
 	auto *ctx = static_cast<SmartSelectionSource *>(data);
-	if (!ctx || !ctx->internal_mc)
-		return;
+	if (!ctx || !ctx->internal_mc) return;
 	obs_source_video_render(ctx->internal_mc);
 }
 
-// NOTE: We deliberately do NOT register a video_tick callback. Forwarding ticks
-// manually to the child source would require obs_source_video_tick(), which is
-// an internal libobs API not exported to plugins. libobs walks active children
-// (via ss_enum_active_sources below) and ticks them automatically.
-
-// CRITICAL: For wrapped/private sources to actually capture, libobs needs us
-// to forward the show/active state changes. Without these the child's show
-// count stays at 0 and monitor_capture never starts capturing → black canvas.
+// CRITICAL: forward show/active state so child monitor_capture starts running.
 void ss_show(void *data)
 {
 	auto *ctx = static_cast<SmartSelectionSource *>(data);
-	if (ctx && ctx->internal_mc)
-		obs_source_inc_showing(ctx->internal_mc);
+	if (ctx && ctx->internal_mc) obs_source_inc_showing(ctx->internal_mc);
 }
-
 void ss_hide(void *data)
 {
 	auto *ctx = static_cast<SmartSelectionSource *>(data);
-	if (ctx && ctx->internal_mc)
-		obs_source_dec_showing(ctx->internal_mc);
+	if (ctx && ctx->internal_mc) obs_source_dec_showing(ctx->internal_mc);
 }
-
 void ss_activate(void *data)
 {
 	auto *ctx = static_cast<SmartSelectionSource *>(data);
-	if (ctx && ctx->internal_mc)
-		obs_source_inc_active(ctx->internal_mc);
+	if (ctx && ctx->internal_mc) obs_source_inc_active(ctx->internal_mc);
 }
-
 void ss_deactivate(void *data)
 {
 	auto *ctx = static_cast<SmartSelectionSource *>(data);
-	if (ctx && ctx->internal_mc)
-		obs_source_dec_active(ctx->internal_mc);
+	if (ctx && ctx->internal_mc) obs_source_dec_active(ctx->internal_mc);
 }
 
 void ss_enum_active_sources(void *data, obs_source_enum_proc_t enum_callback,
@@ -235,37 +208,28 @@ void ss_update(void *data, obs_data_t *settings)
 	ctx->cx = std::max(1, new_cx);
 	ctx->cy = std::max(1, new_cy);
 
-	if (monitor_changed)
-		apply_monitor_to_child(ctx);
+	if (monitor_changed) apply_monitor_to_child(ctx);
 	apply_crop_to_child(ctx);
 }
-
-// ----- Properties -----
 
 bool on_select_region_clicked(obs_properties_t *props, obs_property_t *prop,
 			      void *data)
 {
 	UNUSED_PARAMETER(prop);
 	auto *ctx = static_cast<SmartSelectionSource *>(data);
-	if (!ctx)
-		return false;
+	if (!ctx) return false;
 
-	// Must run on UI thread; OBS button callbacks are already on UI thread.
 	if (!QApplication::instance()) {
-		obs_log(LOG_WARNING,
-			"no QApplication available; cannot show overlay");
+		obs_log(LOG_WARNING, "no QApplication available; cannot show overlay");
 		return false;
 	}
 
 	SelectionOverlay overlay;
-	if (!overlay.runModal())
-		return false; // user cancelled
+	if (!overlay.runModal()) return false;
 
 	const QRect virt = overlay.resultRect();
-	if (virt.isEmpty())
-		return false;
+	if (virt.isEmpty()) return false;
 
-	// Find which monitor contains the rect's center, in virtual coords.
 	const QPoint center = virt.center();
 	const auto screens = QApplication::screens();
 	int found_idx = -1;
@@ -283,7 +247,6 @@ bool on_select_region_clicked(obs_properties_t *props, obs_property_t *prop,
 		target_geom = screens[0]->geometry();
 	}
 
-	// Translate virtual-desktop coords → monitor-local coords, clamp.
 	int local_x  = virt.x() - target_geom.x();
 	int local_y  = virt.y() - target_geom.y();
 	int local_cx = virt.width();
@@ -297,7 +260,6 @@ bool on_select_region_clicked(obs_properties_t *props, obs_property_t *prop,
 	local_cx = std::max(1, local_cx);
 	local_cy = std::max(1, local_cy);
 
-	// Persist into source settings; OBS will call ss_update for us.
 	obs_data_t *s = obs_source_get_settings(ctx->self);
 	obs_data_set_int(s, SETTING_MONITOR_IDX, found_idx);
 	obs_data_set_int(s, SETTING_X,  local_x);
@@ -308,36 +270,58 @@ bool on_select_region_clicked(obs_properties_t *props, obs_property_t *prop,
 	obs_data_release(s);
 
 	obs_log(LOG_INFO,
-		"region selected on monitor #%d -> x=%d y=%d cx=%d cy=%d "
-		"(virtual rect %d,%d %dx%d)",
-		found_idx, local_x, local_y, local_cx, local_cy,
-		virt.x(), virt.y(), virt.width(), virt.height());
+		"region on monitor #%d -> x=%d y=%d cx=%d cy=%d",
+		found_idx, local_x, local_y, local_cx, local_cy);
 
 	UNUSED_PARAMETER(props);
-	return true; // refresh property UI to show new x/y/cx/cy
+	return true;
 }
 
 obs_properties_t *ss_properties(void *data)
 {
 	UNUSED_PARAMETER(data);
 	obs_properties_t *p = obs_properties_create();
-
 	obs_properties_add_button(p, "select_region",
-				  obs_module_text("SmartSelection.SelectRegion"),
-				  on_select_region_clicked);
-
+		obs_module_text("SmartSelection.SelectRegion"),
+		on_select_region_clicked);
 	obs_properties_add_int(p, SETTING_MONITOR_IDX,
-			       obs_module_text("SmartSelection.Monitor"),
-			       0, 16, 1);
+		obs_module_text("SmartSelection.Monitor"), 0, 16, 1);
 	obs_properties_add_int(p, SETTING_X,
-			       obs_module_text("SmartSelection.X"),
-			       0, 16384, 1);
+		obs_module_text("SmartSelection.X"), 0, 16384, 1);
 	obs_properties_add_int(p, SETTING_Y,
-			       obs_module_text("SmartSelection.Y"),
-			       0, 16384, 1);
+		obs_module_text("SmartSelection.Y"), 0, 16384, 1);
 	obs_properties_add_int(p, SETTING_CX,
-			       obs_module_text("SmartSelection.Width"),
-			       1, 16384, 1);
+		obs_module_text("SmartSelection.Width"), 1, 16384, 1);
 	obs_properties_add_int(p, SETTING_CY,
-			       obs_module_text("SmartSelection.Height"),
-			       1, 163
+		obs_module_text("SmartSelection.Height"), 1, 16384, 1);
+	return p;
+}
+
+obs_source_info make_source_info()
+{
+	obs_source_info info = {};
+	info.id           = kSourceId;
+	info.type         = OBS_SOURCE_TYPE_INPUT;
+	info.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW;
+	info.icon_type    = OBS_ICON_TYPE_DESKTOP_CAPTURE;
+
+	info.get_name            = ss_get_name;
+	info.create              = ss_create;
+	info.destroy             = ss_destroy;
+	info.get_width           = ss_get_width;
+	info.get_height          = ss_get_height;
+	info.get_defaults        = ss_get_defaults;
+	info.get_properties      = ss_properties;
+	info.update              = ss_update;
+	info.video_render        = ss_video_render;
+	info.enum_active_sources = ss_enum_active_sources;
+	info.show                = ss_show;
+	info.hide                = ss_hide;
+	info.activate            = ss_activate;
+	info.deactivate          = ss_deactivate;
+	return info;
+}
+
+} // namespace
+
+extern "C" struct obs_source_info smart_selection_source_info = make_source_info();
