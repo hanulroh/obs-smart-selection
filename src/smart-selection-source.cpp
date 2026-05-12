@@ -1,16 +1,8 @@
 /*
 Smart Selection — source implementation.
 
-This source is a "wrapper": it owns a private monitor_capture child source and
-a crop_filter attached to that child. The user-facing properties are:
-
-  * Monitor index (which monitor to capture from)
-  * Region X, Y, Width, Height (crop applied to that monitor's frame)
-  * "🎯 Drag to select region" button (opens fullscreen Qt overlay)
-
-The Qt overlay must be invoked on OBS's UI (main) thread because it touches
-Qt widgets. OBS calls obs_properties_t button callbacks on the UI thread
-already, so we can call SelectionOverlay::runModal() directly from there.
+Wrapper source: owns a private monitor_capture + crop_filter. Properties:
+  monitor (int), x, y, cx, cy, "Drag to select region" button.
 */
 
 #include <obs-module.h>
@@ -29,6 +21,12 @@ extern "C" {
 
 #include <algorithm>
 #include <cstring>
+#include <string>
+
+#ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#endif
 
 #define SETTING_MONITOR_IDX "monitor"
 #define SETTING_X           "x"
@@ -55,21 +53,60 @@ struct SmartSelectionSource {
 
 const char *kSourceId = "smart_selection_source";
 
+#ifdef _WIN32
+struct MonitorEnumCtx {
+	int  target_idx;
+	int  current_idx;
+	std::string device_name; // e.g. "\\\\.\\DISPLAY1"
+};
+
+BOOL CALLBACK monitor_enum_cb(HMONITOR mon, HDC, LPRECT, LPARAM lparam)
+{
+	auto *c = reinterpret_cast<MonitorEnumCtx *>(lparam);
+	if (c->current_idx == c->target_idx) {
+		MONITORINFOEXA mi;
+		mi.cbSize = sizeof(mi);
+		if (GetMonitorInfoA(mon, &mi))
+			c->device_name = mi.szDevice;
+		return FALSE; // stop
+	}
+	c->current_idx++;
+	return TRUE;
+}
+
+std::string get_monitor_device_name(int idx)
+{
+	MonitorEnumCtx c{idx, 0, ""};
+	EnumDisplayMonitors(nullptr, nullptr, monitor_enum_cb,
+			    reinterpret_cast<LPARAM>(&c));
+	return c.device_name;
+}
+#else
+std::string get_monitor_device_name(int) { return ""; }
+#endif
+
 void apply_monitor_to_child(SmartSelectionSource *ctx)
 {
-	if (!ctx->internal_mc)
-		return;
+	if (!ctx->internal_mc) return;
 	obs_data_t *s = obs_data_create();
 	obs_data_set_int(s, "monitor", ctx->monitor_idx);
-	obs_data_set_int(s, "method", 2);
+	obs_data_set_int(s, "method",  0); // 0=Auto, 1=DXGI, 2=WGC
+	std::string dev = get_monitor_device_name(ctx->monitor_idx);
+	if (!dev.empty()) {
+		obs_data_set_string(s, "monitor_id", dev.c_str());
+		obs_log(LOG_INFO, "applied monitor_id='%s' (idx=%d)",
+			dev.c_str(), ctx->monitor_idx);
+	} else {
+		obs_log(LOG_WARNING, "monitor_id empty for idx=%d (Win32 enum failed)",
+			ctx->monitor_idx);
+	}
 	obs_source_update(ctx->internal_mc, s);
 	obs_data_release(s);
 }
 
 void apply_crop_to_child(SmartSelectionSource *ctx)
 {
-	if (!ctx->internal_crop)
-		return;
+	if (!ctx->internal_crop) return;
 	obs_data_t *s = obs_data_create();
 	obs_data_set_bool(s, "relative", false);
 	obs_data_set_int(s, "x",  ctx->x);
@@ -98,7 +135,10 @@ void *ss_create(obs_data_t *settings, obs_source_t *source)
 	{
 		obs_data_t *s = obs_data_create();
 		obs_data_set_int(s, "monitor", ctx->monitor_idx);
-		obs_data_set_int(s, "method", 2);
+		obs_data_set_int(s, "method",  0);
+		std::string dev = get_monitor_device_name(ctx->monitor_idx);
+		if (!dev.empty())
+			obs_data_set_string(s, "monitor_id", dev.c_str());
 		ctx->internal_mc = obs_source_create_private(
 			"monitor_capture", "smartsel_internal_capture", s);
 		obs_data_release(s);
@@ -119,8 +159,12 @@ void *ss_create(obs_data_t *settings, obs_source_t *source)
 	if (ctx->internal_mc && ctx->internal_crop)
 		obs_source_filter_add(ctx->internal_mc, ctx->internal_crop);
 
+	const uint32_t mc_w = ctx->internal_mc ? obs_source_get_width(ctx->internal_mc) : 0;
+	const uint32_t mc_h = ctx->internal_mc ? obs_source_get_height(ctx->internal_mc) : 0;
 	obs_log(LOG_INFO,
-		"created (monitor=%d x=%d y=%d cx=%d cy=%d)",
+		"created src=%p internal_mc=%p (w=%u h=%u) internal_crop=%p "
+		"monitor=%d x=%d y=%d cx=%d cy=%d",
+		ctx->self, ctx->internal_mc, mc_w, mc_h, ctx->internal_crop,
 		ctx->monitor_idx, ctx->x, ctx->y, ctx->cx, ctx->cy);
 	return ctx;
 }
@@ -153,11 +197,14 @@ void ss_video_render(void *data, gs_effect_t *)
 	obs_source_video_render(ctx->internal_mc);
 }
 
-// CRITICAL: forward show/active state so child monitor_capture starts running.
 void ss_show(void *data)
 {
 	auto *ctx = static_cast<SmartSelectionSource *>(data);
-	if (ctx && ctx->internal_mc) obs_source_inc_showing(ctx->internal_mc);
+	if (ctx && ctx->internal_mc) {
+		obs_source_inc_showing(ctx->internal_mc);
+		obs_log(LOG_INFO, "show -> inc_showing on child (mc_w=%u)",
+			obs_source_get_width(ctx->internal_mc));
+	}
 }
 void ss_hide(void *data)
 {
@@ -210,6 +257,11 @@ void ss_update(void *data, obs_data_t *settings)
 
 	if (monitor_changed) apply_monitor_to_child(ctx);
 	apply_crop_to_child(ctx);
+
+	obs_log(LOG_INFO, "update m=%d x=%d y=%d cx=%d cy=%d (mc=%ux%u)",
+		ctx->monitor_idx, ctx->x, ctx->y, ctx->cx, ctx->cy,
+		ctx->internal_mc ? obs_source_get_width(ctx->internal_mc) : 0,
+		ctx->internal_mc ? obs_source_get_height(ctx->internal_mc) : 0);
 }
 
 bool on_select_region_clicked(obs_properties_t *props, obs_property_t *prop,
@@ -269,10 +321,8 @@ bool on_select_region_clicked(obs_properties_t *props, obs_property_t *prop,
 	obs_source_update(ctx->self, s);
 	obs_data_release(s);
 
-	obs_log(LOG_INFO,
-		"region on monitor #%d -> x=%d y=%d cx=%d cy=%d",
+	obs_log(LOG_INFO, "region on monitor #%d -> x=%d y=%d cx=%d cy=%d",
 		found_idx, local_x, local_y, local_cx, local_cy);
-
 	UNUSED_PARAMETER(props);
 	return true;
 }
