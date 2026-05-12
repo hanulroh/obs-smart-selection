@@ -166,15 +166,10 @@ void ss_video_render(void *data, gs_effect_t *)
 	obs_source_video_render(ctx->internal_mc);
 }
 
-void ss_video_tick(void *data, float seconds)
-{
-	UNUSED_PARAMETER(seconds);
-	auto *ctx = static_cast<SmartSelectionSource *>(data);
-	if (!ctx || !ctx->internal_mc)
-		return;
-	// Forward tick so the child runs at the right cadence.
-	obs_source_video_tick(ctx->internal_mc, seconds);
-}
+// NOTE: We deliberately do NOT register a video_tick callback. Forwarding ticks
+// manually to the child source would require obs_source_video_tick(), which is
+// an internal libobs API not exported to plugins. libobs walks active children
+// (via ss_enum_active_sources below) and ticks them automatically.
 
 void ss_enum_active_sources(void *data, obs_source_enum_proc_t enum_callback,
 			    void *param)
@@ -337,7 +332,6 @@ obs_source_info make_source_info()
 	info.get_properties     = ss_properties;
 	info.update             = ss_update;
 	info.video_render       = ss_video_render;
-	info.video_tick         = ss_video_tick;
 	info.enum_active_sources = ss_enum_active_sources;
 	return info;
 }
@@ -345,3 +339,4 @@ obs_source_info make_source_info()
 } // namespace
 
 extern "C" struct obs_source_info smart_selection_source_info = make_source_info();
+                 
