@@ -82,6 +82,36 @@ std::string get_monitor_device_name(int idx)
 			    reinterpret_cast<LPARAM>(&c));
 	return c.device_name;
 }
+
+struct MonitorIndexCtx {
+	std::string target_device;
+	int  found_index = -1;
+	int  current_index = 0;
+};
+
+BOOL CALLBACK monitor_index_cb(HMONITOR mon, HDC, LPRECT, LPARAM lparam)
+{
+	auto *c = reinterpret_cast<MonitorIndexCtx *>(lparam);
+	MONITORINFOEXA mi;
+	mi.cbSize = sizeof(mi);
+	if (GetMonitorInfoA(mon, &mi)) {
+		if (c->target_device == mi.szDevice) {
+			c->found_index = c->current_index;
+			return FALSE;
+		}
+	}
+	c->current_index++;
+	return TRUE;
+}
+
+int find_monitor_index_by_device(const std::string &device_name)
+{
+	MonitorIndexCtx c;
+	c.target_device = device_name;
+	EnumDisplayMonitors(nullptr, nullptr, monitor_index_cb,
+			    reinterpret_cast<LPARAM>(&c));
+	return c.found_index;
+}
 #else
 std::string get_monitor_device_name(int) { return ""; }
 #endif
@@ -328,8 +358,30 @@ bool on_select_region_clicked(obs_properties_t *props, obs_property_t *prop,
 		}
 	}
 
+	// Qt와 Win32의 모니터 enumeration 순서가 다를 수 있다.
+	// QScreen::name()은 Windows에서 GDI device name(\\.\DISPLAY1)을 돌려주므로
+	// 그것으로 Win32 인덱스를 다시 찾아 OBS에 정확한 monitor 값을 전달한다.
+	int win32_monitor_idx = found_idx;
+#ifdef _WIN32
+	if (found_idx >= 0 && found_idx < screens.size()) {
+		QString qname = screens[found_idx]->name();
+		std::string device = qname.toStdString();
+		int resolved = find_monitor_index_by_device(device);
+		if (resolved >= 0) {
+			win32_monitor_idx = resolved;
+			obs_log(LOG_INFO,
+				"monitor mapping: Qt idx=%d (\"%s\") -> Win32 idx=%d",
+				found_idx, device.c_str(), resolved);
+		} else {
+			obs_log(LOG_WARNING,
+				"could not resolve Win32 idx for QScreen \"%s\"",
+				device.c_str());
+		}
+	}
+#endif
+
 	obs_data_t *s = obs_source_get_settings(ctx->self);
-	obs_data_set_int(s, SETTING_MONITOR_IDX, found_idx);
+	obs_data_set_int(s, SETTING_MONITOR_IDX, win32_monitor_idx);
 	obs_data_set_int(s, SETTING_X,  local_x);
 	obs_data_set_int(s, SETTING_Y,  local_y);
 	obs_data_set_int(s, SETTING_CX, local_cx);
