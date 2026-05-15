@@ -42,9 +42,10 @@ extern "C" {
 namespace {
 
 struct SmartSelectionSource {
-	obs_source_t *self          = nullptr;
-	obs_source_t *internal_mc   = nullptr;
-	obs_source_t *internal_crop = nullptr;
+	obs_source_t   *self          = nullptr;
+	obs_source_t   *internal_mc   = nullptr;
+	obs_source_t   *internal_crop = nullptr;
+	gs_texrender_t *texrender     = nullptr;
 
 	int monitor_idx = 0;
 	int x  = 0;
@@ -221,6 +222,11 @@ void ss_destroy(void *data)
 {
 	auto *ctx = static_cast<SmartSelectionSource *>(data);
 	if (!ctx) return;
+	if (ctx->texrender) {
+		obs_enter_graphics();
+		gs_texrender_destroy(ctx->texrender);
+		obs_leave_graphics();
+	}
 	if (ctx->internal_crop) obs_source_release(ctx->internal_crop);
 	if (ctx->internal_mc)   obs_source_release(ctx->internal_mc);
 	delete ctx;
@@ -243,14 +249,48 @@ void ss_video_render(void *data, gs_effect_t *)
 	auto *ctx = static_cast<SmartSelectionSource *>(data);
 	if (!ctx || !ctx->internal_mc) return;
 
-	// Manual crop: translate the child render so that (ctx->x, ctx->y) of the
-	// monitor appears at (0,0) of our render target. Our wrapper reports
-	// (cx, cy) as its dimensions, so only that visible window is shown —
-	// pixels outside are clipped by the render target boundary.
-	gs_matrix_push();
-	gs_matrix_translate3f((float)(-ctx->x), (float)(-ctx->y), 0.0f);
-	obs_source_video_render(ctx->internal_mc);
-	gs_matrix_pop();
+	const uint32_t mw = obs_source_get_width(ctx->internal_mc);
+	const uint32_t mh = obs_source_get_height(ctx->internal_mc);
+	if (mw == 0 || mh == 0) return;
+
+	// Lazily create the texrender (graphics context already active here).
+	if (!ctx->texrender)
+		ctx->texrender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+	if (!ctx->texrender) return;
+
+	// Render the entire monitor capture into our private texture.
+	gs_texrender_reset(ctx->texrender);
+	if (gs_texrender_begin(ctx->texrender, mw, mh)) {
+		struct vec4 clear;
+		vec4_zero(&clear);
+		gs_clear(GS_CLEAR_COLOR, &clear, 0.0f, 0);
+		gs_ortho(0.0f, (float)mw, 0.0f, (float)mh,
+			 -100.0f, 100.0f);
+		obs_source_video_render(ctx->internal_mc);
+		gs_texrender_end(ctx->texrender);
+	}
+
+	gs_texture_t *tex = gs_texrender_get_texture(ctx->texrender);
+	if (!tex) return;
+
+	// Clamp crop region to the actual monitor size so we don't read OOB.
+	uint32_t sx  = (uint32_t)std::max(0, ctx->x);
+	uint32_t sy  = (uint32_t)std::max(0, ctx->y);
+	uint32_t scx = (uint32_t)std::max(1, ctx->cx);
+	uint32_t scy = (uint32_t)std::max(1, ctx->cy);
+	if (sx >= mw) sx = mw - 1;
+	if (sy >= mh) sy = mh - 1;
+	if (sx + scx > mw) scx = mw - sx;
+	if (sy + scy > mh) scy = mh - sy;
+
+	// Draw only the (sx, sy, scx, scy) sub-region of the texture into our
+	// (cx, cy) render target. This is the precise crop.
+	gs_effect_t *effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
+	gs_eparam_t *image  = gs_effect_get_param_by_name(effect, "image");
+	gs_effect_set_texture(image, tex);
+	while (gs_effect_loop(effect, "Draw")) {
+		gs_draw_sprite_subregion(tex, 0, sx, sy, scx, scy);
+	}
 }
 
 void ss_show(void *data)
