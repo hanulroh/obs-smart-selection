@@ -7,6 +7,7 @@ Wrapper source: owns a private monitor_capture + crop_filter. Properties:
 
 #include <obs-module.h>
 #include <util/dstr.h>
+#include <graphics/graphics.h>
 
 extern "C" {
 #include <plugin-support.h>
@@ -170,17 +171,10 @@ void apply_monitor_to_child(SmartSelectionSource *ctx)
 	obs_data_release(s);
 }
 
-void apply_crop_to_child(SmartSelectionSource *ctx)
+void apply_crop_to_child(SmartSelectionSource *)
 {
-	if (!ctx->internal_crop) return;
-	obs_data_t *s = obs_data_create();
-	obs_data_set_bool(s, "relative", false);
-	obs_data_set_int(s, "x",  ctx->x);
-	obs_data_set_int(s, "y",  ctx->y);
-	obs_data_set_int(s, "cx", std::max(1, ctx->cx));
-	obs_data_set_int(s, "cy", std::max(1, ctx->cy));
-	obs_source_update(ctx->internal_crop, s);
-	obs_data_release(s);
+	// 매트릭스 변환 방식으로 바뀌어 더이상 필터를 갱신할 필요가 없음.
+	// 크롭 좌표(ctx->x, y, cx, cy)는 ss_video_render에서 매번 사용된다.
 }
 
 const char *ss_get_name(void *)
@@ -210,20 +204,8 @@ void *ss_create(obs_data_t *settings, obs_source_t *source)
 		obs_data_release(s);
 	}
 
-	{
-		obs_data_t *s = obs_data_create();
-		obs_data_set_bool(s, "relative", false);
-		obs_data_set_int(s, "x",  ctx->x);
-		obs_data_set_int(s, "y",  ctx->y);
-		obs_data_set_int(s, "cx", std::max(1, ctx->cx));
-		obs_data_set_int(s, "cy", std::max(1, ctx->cy));
-		ctx->internal_crop = obs_source_create_private(
-			"crop_filter", "smartsel_internal_crop", s);
-		obs_data_release(s);
-	}
-
-	if (ctx->internal_mc && ctx->internal_crop)
-		obs_source_filter_add(ctx->internal_mc, ctx->internal_crop);
+	// crop_filter는 사용하지 않는다 (매트릭스 변환으로 직접 크롭).
+	ctx->internal_crop = nullptr;
 
 	const uint32_t mc_w = ctx->internal_mc ? obs_source_get_width(ctx->internal_mc) : 0;
 	const uint32_t mc_h = ctx->internal_mc ? obs_source_get_height(ctx->internal_mc) : 0;
@@ -260,7 +242,15 @@ void ss_video_render(void *data, gs_effect_t *)
 {
 	auto *ctx = static_cast<SmartSelectionSource *>(data);
 	if (!ctx || !ctx->internal_mc) return;
+
+	// Manual crop: translate the child render so that (ctx->x, ctx->y) of the
+	// monitor appears at (0,0) of our render target. Our wrapper reports
+	// (cx, cy) as its dimensions, so only that visible window is shown —
+	// pixels outside are clipped by the render target boundary.
+	gs_matrix_push();
+	gs_matrix_translate3f((float)(-ctx->x), (float)(-ctx->y), 0.0f);
 	obs_source_video_render(ctx->internal_mc);
+	gs_matrix_pop();
 }
 
 void ss_show(void *data)
