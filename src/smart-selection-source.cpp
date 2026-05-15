@@ -112,6 +112,41 @@ int find_monitor_index_by_device(const std::string &device_name)
 			    reinterpret_cast<LPARAM>(&c));
 	return c.found_index;
 }
+
+// HMONITOR 기준으로 EnumDisplayMonitors 순서의 인덱스를 찾는다
+struct HmonIndexCtx {
+	HMONITOR target = nullptr;
+	int found_index = -1;
+	int current_index = 0;
+};
+
+BOOL CALLBACK hmon_index_cb(HMONITOR mon, HDC, LPRECT, LPARAM lparam)
+{
+	auto *c = reinterpret_cast<HmonIndexCtx *>(lparam);
+	if (mon == c->target) {
+		c->found_index = c->current_index;
+		return FALSE;
+	}
+	c->current_index++;
+	return TRUE;
+}
+
+// Qt 의 QScreen 한 개를 좌표 기반으로 Win32 모니터 인덱스에 매칭
+int find_monitor_index_for_qscreen(QScreen *screen)
+{
+	if (!screen) return -1;
+	const QRect g = screen->geometry();
+	const qreal dpr = screen->devicePixelRatio();
+	POINT pt;
+	pt.x = (LONG)((g.x() + g.width()  / 2) * dpr);
+	pt.y = (LONG)((g.y() + g.height() / 2) * dpr);
+	HMONITOR hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+	HmonIndexCtx c;
+	c.target = hmon;
+	EnumDisplayMonitors(nullptr, nullptr, hmon_index_cb,
+			    reinterpret_cast<LPARAM>(&c));
+	return c.found_index;
+}
 #else
 std::string get_monitor_device_name(int) { return ""; }
 #endif
@@ -378,11 +413,13 @@ bool on_select_region_clicked(obs_properties_t *props, obs_property_t *prop,
 	}
 #ifdef _WIN32
 	if (found_idx >= 0 && found_idx < screens.size()) {
-		QString qname = screens[found_idx]->name();
-		std::string device = qname.toStdString();
-		int resolved = find_monitor_index_by_device(device);
-		blog(LOG_INFO, "[smart_selection] mapping Qt idx=%d ('%s') -> Win32 idx=%d",
-		     found_idx, device.c_str(), resolved);
+		QScreen *qs = screens[found_idx];
+		int resolved = find_monitor_index_for_qscreen(qs);
+		blog(LOG_INFO,
+		     "[smart_selection] mapping Qt idx=%d ('%s', dpr=%.2f) "
+		     "via MonitorFromPoint -> Win32 idx=%d",
+		     found_idx, qs->name().toUtf8().constData(),
+		     qs->devicePixelRatio(), resolved);
 		if (resolved >= 0) {
 			win32_monitor_idx = resolved;
 		}
