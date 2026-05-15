@@ -362,23 +362,36 @@ bool on_select_region_clicked(obs_properties_t *props, obs_property_t *prop,
 	// QScreen::name()은 Windows에서 GDI device name(\\.\DISPLAY1)을 돌려주므로
 	// 그것으로 Win32 인덱스를 다시 찾아 OBS에 정확한 monitor 값을 전달한다.
 	int win32_monitor_idx = found_idx;
+	// ALWAYS log so we can verify which build is running and what mapping happens.
+	blog(LOG_INFO, "[smart_selection] === select_region START ===");
+	blog(LOG_INFO, "[smart_selection] virtual rect = (%d,%d)-(%dx%d)",
+	     virt.x(), virt.y(), virt.width(), virt.height());
+	blog(LOG_INFO, "[smart_selection] Qt screens count = %d, found_idx = %d",
+	     (int)screens.size(), found_idx);
+	for (int i = 0; i < screens.size(); ++i) {
+		const QRect g = screens[i]->geometry();
+		blog(LOG_INFO, "[smart_selection]   Qt[%d] name='%s' geom=(%d,%d)-(%dx%d) dpr=%.2f",
+		     i,
+		     screens[i]->name().toUtf8().constData(),
+		     g.x(), g.y(), g.width(), g.height(),
+		     screens[i]->devicePixelRatio());
+	}
 #ifdef _WIN32
 	if (found_idx >= 0 && found_idx < screens.size()) {
 		QString qname = screens[found_idx]->name();
 		std::string device = qname.toStdString();
 		int resolved = find_monitor_index_by_device(device);
+		blog(LOG_INFO, "[smart_selection] mapping Qt idx=%d ('%s') -> Win32 idx=%d",
+		     found_idx, device.c_str(), resolved);
 		if (resolved >= 0) {
 			win32_monitor_idx = resolved;
-			obs_log(LOG_INFO,
-				"monitor mapping: Qt idx=%d (\"%s\") -> Win32 idx=%d",
-				found_idx, device.c_str(), resolved);
-		} else {
-			obs_log(LOG_WARNING,
-				"could not resolve Win32 idx for QScreen \"%s\"",
-				device.c_str());
 		}
+	} else {
+		blog(LOG_WARNING, "[smart_selection] found_idx out of range or no screens");
 	}
 #endif
+	blog(LOG_INFO, "[smart_selection] FINAL: monitor=%d local=(%d,%d) size=(%dx%d)",
+	     win32_monitor_idx, local_x, local_y, local_cx, local_cy);
 
 	obs_data_t *s = obs_source_get_settings(ctx->self);
 	obs_data_set_int(s, SETTING_MONITOR_IDX, win32_monitor_idx);
